@@ -1,0 +1,16 @@
+{
+  "name": "swarm",
+  "version": "0.1.0",
+  "description": "Pure, deterministic, headless-testable particle / lightweight-fluid engine (smoke, snow, petals, SPH-lite water) for visual effects.",
+  "type": "module",
+  "main": "index.js",
+  "exports": "./index.js",
+  "files": ["index.js"],
+  "scripts": {
+    "test": "node test.mjs"
+  },
+  "keywords": ["particles", "fluid", "sph", "effects", "deterministic"],
+  "license": "MIT",
+  "author": "opaopa6969",
+  "repository": { "type": "git", "url": "https://github.com/opaopa6969/swarm.git" }
+}
