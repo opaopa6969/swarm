@@ -37,9 +37,13 @@ export function mulberry32(seed) {
 // curl-ish wind: a deterministic, divergence-free-ish drift from a sum of
 // incommensurate sines (no noise table, no Math.random). Gives organic swirl
 // for smoke/snow instead of a flat constant push. Returns [ax, ay].
-function wind(x, y, t, amp) {
-  const ax = Math.sin(y * 0.7 + t * 0.6) + 0.5 * Math.sin(y * 1.7 - t * 0.9 + x * 0.3);
-  const ay = Math.cos(x * 0.8 - t * 0.5) + 0.5 * Math.cos(x * 1.9 + t * 0.7 - y * 0.4);
+function wind(x, y, t, amp, scale) {
+  // scale = world-units per wind wavelength. The sine frequencies assume
+  // O(1) coords; pixel-space callers pass scale≈100+ so gusts stay coherent
+  // (large flowing eddies) instead of scrambling per-pixel.
+  const xs = x / scale, ys = y / scale;
+  const ax = Math.sin(ys * 0.7 + t * 0.6) + 0.5 * Math.sin(ys * 1.7 - t * 0.9 + xs * 0.3);
+  const ay = Math.cos(xs * 0.8 - t * 0.5) + 0.5 * Math.cos(xs * 1.9 + t * 0.7 - ys * 0.4);
   return [ax * amp, ay * amp];
 }
 
@@ -53,6 +57,7 @@ export class Field {
     gravity = [0, -9.8],   // m/s^2; snow/petals use a small |g|, splash a large one
     drag = 0.1,            // velocity damping per second (air resistance)
     windAmp = 0.0,         // curl-ish wind strength (0 = still air)
+    windScale = 1.0,       // world-units per wind wavelength (pixel-space: ~100+)
     flutter = 0.0,         // per-particle lateral sway amplitude (petals/leaves ひらひら)
     flutterFreq = 1.2,     // sway oscillations per second (each particle gets its own phase)
     vortex = null,         // { center:[x,y], strength, inward=0 } — tornado/updraft swirl
@@ -63,6 +68,7 @@ export class Field {
     this.gravity = gravity;
     this.drag = drag;
     this.windAmp = windAmp;
+    this.windScale = windScale;
     this.flutter = flutter;
     this.flutterFreq = flutterFreq;
     this.vortex = vortex;
@@ -106,15 +112,14 @@ export class Field {
   step(dt) {
     const { pos, vel, gravity, drag, flutter, phase, wobble } = this;
     const gx = gravity[0], gy = gravity[1];
-    const damp = Math.max(0, 1 - drag * dt);   // exponential-ish drag, dt-stable
-    this.t += dt;
-    const vx0 = this.vortex;
+    this.t += dt;                              // per-particle drag computed in-loop
+    const vx0 = this.vortex, wscale = this.windScale || 1;
     for (let k = 0; k < this.count; k++) {
       const w = wobble[k] || 1;
       let vx = vel[k * 2], vy = vel[k * 2 + 1];
       vx += gx * dt; vy += gy * dt;            // gravity
       if (this.windAmp) {                       // curl-ish wind (organic drift)
-        const [wx, wy] = wind(pos[k * 2], pos[k * 2 + 1], this.t, this.windAmp);
+        const [wx, wy] = wind(pos[k * 2], pos[k * 2 + 1], this.t, this.windAmp, wscale);
         vx += wx * w * dt; vy += wy * w * dt;
       }
       if (flutter) {                            // ひらひら: per-particle lateral sway
@@ -128,7 +133,11 @@ export class Field {
         vx += (-dy * inv * st - dx * inv * (vx0.inward || 0) * st) * dt;  // tangential + inward
         vy += (dx * inv * st - dy * inv * (vx0.inward || 0) * st) * dt;
       }
-      vx *= damp; vy *= damp;                   // drag
+      // per-particle drag (wobble as a size/mass proxy): lighter particles are
+      // dragged harder → they fall slower, so a field shows a spread of speeds
+      // instead of one uniform terminal velocity.
+      const pdamp = Math.max(0, 1 - drag * (2 - w) * dt);
+      vx *= pdamp; vy *= pdamp;
       vel[k * 2] = vx; vel[k * 2 + 1] = vy;
       pos[k * 2] += vx * dt;                    // integrate position
       pos[k * 2 + 1] += vy * dt;
