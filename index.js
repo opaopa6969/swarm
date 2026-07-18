@@ -53,6 +53,9 @@ export class Field {
     gravity = [0, -9.8],   // m/s^2; snow/petals use a small |g|, splash a large one
     drag = 0.1,            // velocity damping per second (air resistance)
     windAmp = 0.0,         // curl-ish wind strength (0 = still air)
+    flutter = 0.0,         // per-particle lateral sway amplitude (petals/leaves ひらひら)
+    flutterFreq = 1.2,     // sway oscillations per second (each particle gets its own phase)
+    vortex = null,         // { center:[x,y], strength, inward=0 } — tornado/updraft swirl
     bounds = null,         // optional [minX,minY,maxX,maxY] for M3 collision/cull
     seed = 1,
     capacity = 8192,       // max particles (buffers are pre-sized, never grow mid-step)
@@ -60,6 +63,9 @@ export class Field {
     this.gravity = gravity;
     this.drag = drag;
     this.windAmp = windAmp;
+    this.flutter = flutter;
+    this.flutterFreq = flutterFreq;
+    this.vortex = vortex;
     this.bounds = bounds;
     this.capacity = capacity;
     this.rand = mulberry32(seed);
@@ -69,6 +75,11 @@ export class Field {
     this.vel = new Float64Array(capacity * 2);
     this.life = new Float64Array(capacity);   // seconds remaining; <=0 → recycled
     this.age = new Float64Array(capacity);     // seconds lived (for fade-in/out)
+    // per-particle traits so motion isn't uniform: flutter phase + a size/mass
+    // scalar that scales how strongly wind/flutter push each particle around.
+    this.phase = new Float64Array(capacity);   // radians, flutter sway offset
+    this.spin = new Float64Array(capacity);    // rad/s, visual rotation rate for the host
+    this.wobble = new Float64Array(capacity);  // 0.6..1.4 per-particle drift multiplier
   }
 
   // spawn n particles from `pos` with seeded jitter. `spread` scatters position,
@@ -83,6 +94,9 @@ export class Field {
       this.vel[k * 2 + 1] = vel[1] + (r() - 0.5) * 2 * velJitter;
       this.life[k] = Math.max(0.0001, life + (r() - 0.5) * 2 * lifeJitter);
       this.age[k] = 0;
+      this.phase[k] = r() * Math.PI * 2;                 // unique flutter phase
+      this.spin[k] = (r() - 0.5) * 2 * 4;                // -4..4 rad/s tumble
+      this.wobble[k] = 0.6 + r() * 0.8;                  // 0.6..1.4 drift scale
     }
     return this;
   }
@@ -90,16 +104,29 @@ export class Field {
   // advance the whole field by dt: forces → integrate → age/cull. Semi-implicit
   // Euler (velocity first) for stability. Fixed-dt callers stay deterministic.
   step(dt) {
-    const { pos, vel, gravity, drag } = this;
+    const { pos, vel, gravity, drag, flutter, phase, wobble } = this;
     const gx = gravity[0], gy = gravity[1];
     const damp = Math.max(0, 1 - drag * dt);   // exponential-ish drag, dt-stable
     this.t += dt;
+    const vx0 = this.vortex;
     for (let k = 0; k < this.count; k++) {
+      const w = wobble[k] || 1;
       let vx = vel[k * 2], vy = vel[k * 2 + 1];
       vx += gx * dt; vy += gy * dt;            // gravity
       if (this.windAmp) {                       // curl-ish wind (organic drift)
         const [wx, wy] = wind(pos[k * 2], pos[k * 2 + 1], this.t, this.windAmp);
-        vx += wx * dt; vy += wy * dt;
+        vx += wx * w * dt; vy += wy * w * dt;
+      }
+      if (flutter) {                            // ひらひら: per-particle lateral sway
+        const s = Math.sin(this.t * this.flutterFreq * Math.PI * 2 + phase[k]);
+        vx += flutter * s * w * dt;
+      }
+      if (vx0) {                                // tornado/updraft swirl around a centre
+        const dx = pos[k * 2] - vx0.center[0], dy = pos[k * 2 + 1] - vx0.center[1];
+        const r2 = dx * dx + dy * dy, inv = 1 / (Math.sqrt(r2) + 1e-3);
+        const st = vx0.strength;
+        vx += (-dy * inv * st - dx * inv * (vx0.inward || 0) * st) * dt;  // tangential + inward
+        vy += (dx * inv * st - dy * inv * (vx0.inward || 0) * st) * dt;
       }
       vx *= damp; vy *= damp;                   // drag
       vel[k * 2] = vx; vel[k * 2 + 1] = vy;
@@ -125,6 +152,7 @@ export class Field {
           this.pos[k * 2] = this.pos[last * 2]; this.pos[k * 2 + 1] = this.pos[last * 2 + 1];
           this.vel[k * 2] = this.vel[last * 2]; this.vel[k * 2 + 1] = this.vel[last * 2 + 1];
           this.life[k] = this.life[last]; this.age[k] = this.age[last];
+          this.phase[k] = this.phase[last]; this.spin[k] = this.spin[last]; this.wobble[k] = this.wobble[last];
         }
         k--; // re-test the swapped-in particle
       }
@@ -134,4 +162,9 @@ export class Field {
   // flat [x0,y0, x1,y1, ...] view of the LIVE particles, for the host renderer.
   get positions() { return this.pos.subarray(0, this.count * 2); }
   get velocities() { return this.vel.subarray(0, this.count * 2); }
+  get ages() { return this.age.subarray(0, this.count); }
+  get lives() { return this.life.subarray(0, this.count); }
+  // per-particle visual rotation (radians) for host renderers that draw a
+  // tumbling sprite — spin[k] is the rate, phase[k] the offset.
+  angle(k) { return this.phase[k] + this.spin[k] * this.age[k]; }
 }

@@ -105,5 +105,44 @@ function run(opts, emitOpts, steps = 120, n = 500) {
   ok(a.every((v, i) => v === b[i]), 'mulberry32 is reproducible for a seed');
 }
 
+
+// 10) flutter: a falling particle drifts laterally (weaves), off by default
+{
+  const off = new Field({ gravity: [0, -30], drag: 0, seed: 3 });
+  off.emit(1, { pos: [0, 500], vel: [0, -20], life: 4 });
+  for (let i = 0; i < 120; i++) off.step(1 / 60);
+  ok(Math.abs(off.positions[0]) < 1e-6, 'no lateral drift when flutter is 0 (default off)');
+
+  const on = new Field({ gravity: [0, -30], drag: 0.3, flutter: 60, flutterFreq: 1.5, seed: 3 });
+  on.emit(1, { pos: [0, 500], vel: [0, -20], life: 4 });
+  const xs = [];
+  for (let i = 0; i < 180; i++) { on.step(1 / 60); xs.push(on.positions[0]); }
+  let dirChanges = 0;
+  for (let i = 2; i < xs.length; i++)
+    if (Math.sign(xs[i] - xs[i - 1]) !== Math.sign(xs[i - 1] - xs[i - 2])) dirChanges++;
+  ok(dirChanges >= 3, 'flutter makes the particle weave (multiple lateral direction changes)');
+}
+
+// 11) vortex: particles orbit the centre; off by default
+{
+  const v = new Field({ gravity: [0, 0], drag: 0, vortex: { center: [0, 0], strength: 80, inward: 0.1 }, seed: 4 });
+  v.emit(1, { pos: [100, 0], life: 5 });
+  const a0 = Math.atan2(v.positions[1], v.positions[0]);
+  for (let i = 0; i < 60; i++) v.step(1 / 60);
+  const a1 = Math.atan2(v.positions[1], v.positions[0]);
+  ok(Math.abs(a1 - a0) > 0.05, 'vortex swirls particles around its centre');
+}
+
+// 12) per-particle traits survive cull (swap keeps phase/spin/wobble aligned)
+{
+  const f = new Field({ capacity: 50, flutter: 10, seed: 7 });
+  f.emit(30, { spread: 1, life: 1 });
+  for (const arr of [f.phase, f.spin, f.wobble]) ok(arr.length === 50, 'trait buffers sized to capacity');
+  f.emit(5, { spread: 1, life: 0.001 });
+  f.step(0.5);
+  ok(allFinite(f) && f.phase.every((v) => Number.isFinite(v)), 'cull keeps trait buffers finite/valid');
+  ok(typeof f.angle(0) === 'number' && Number.isFinite(f.angle(0)), 'angle(k) returns a finite rotation');
+}
+
 console.log(`swarm M1: ${pass} passed${fail ? `, ${fail} failed` : ''}`);
 process.exit(fail ? 1 : 0);
