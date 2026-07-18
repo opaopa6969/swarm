@@ -144,5 +144,37 @@ function run(opts, emitOpts, steps = 120, n = 500) {
   ok(typeof f.angle(0) === 'number' && Number.isFinite(f.angle(0)), 'angle(k) returns a finite rotation');
 }
 
+
+// 13) z-axis: emit/integrate depth; 2D fields keep z=0 (backward compatible)
+{
+  const flat = new Field({ gravity: [0, -10], seed: 1 });
+  flat.emit(5, { spread: 1, life: 2 });
+  flat.step(0.5);
+  ok(flat.depths.every((z) => z === 0), 'z stays 0 for fields that never touch it (2D unchanged)');
+
+  const d = new Field({ drag: 0, seed: 1 });
+  d.emit(1, { pos: [0, 0], z: 10, zVel: 5, life: 3 });
+  ok(Math.abs(d.z(0) - 10) < 1e-9, 'emit sets initial z');
+  d.step(1);
+  ok(d.z(0) > 10, 'zVel integrates the depth forward');
+}
+
+// 14) 3D tornado (vortex axis:"y"): front and back get OPPOSITE screen-x motion
+{
+  const f = new Field({ gravity: [0, 0], drag: 0.1,
+    vortex: { axis: "y", center: [0, 0], centerZ: 0, strength: 100, inward: 0.05, updraft: 20 }, seed: 2 });
+  f.emit(1, { pos: [50, 0], z: 50, life: 5 });   // front
+  f.emit(1, { pos: [50, 0], z: -50, life: 5 });  // back
+  for (let i = 0; i < 20; i++) f.step(1 / 60);
+  ok(Math.sign(f.velocities[0]) !== Math.sign(f.velocities[2]),
+     'front and back particles swirl in opposite screen-x directions (3D rotation)');
+  ok(f.positions[1] > 0, 'updraft lifts particles in y');
+  // determinism
+  const run = () => { const g = new Field({ vortex: { axis: "y", center: [0, 0], strength: 80 }, seed: 9 });
+    g.emit(20, { pos: [30, 0], z: 20, zSpread: 40, life: 3 });
+    for (let i = 0; i < 30; i++) g.step(1 / 60); return [...g.depths]; };
+  ok(JSON.stringify(run()) === JSON.stringify(run()), '3D tornado is deterministic');
+}
+
 console.log(`swarm M1: ${pass} passed${fail ? `, ${fail} failed` : ''}`);
 process.exit(fail ? 1 : 0);

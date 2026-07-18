@@ -86,11 +86,16 @@ export class Field {
     this.phase = new Float64Array(capacity);   // radians, flutter sway offset
     this.spin = new Float64Array(capacity);    // rad/s, visual rotation rate for the host
     this.wobble = new Float64Array(capacity);  // 0.6..1.4 per-particle drift multiplier
+    // optional depth axis: pos/vel stay 2D (x,y) so existing packing is intact;
+    // z is a parallel scalar. Stays 0 unless emit/vortex touch it → 2D by default.
+    this.zpos = new Float64Array(capacity);    // depth: >0 toward viewer, <0 away
+    this.zvel = new Float64Array(capacity);
   }
 
   // spawn n particles from `pos` with seeded jitter. `spread` scatters position,
   // `vel`+`velJitter` set initial velocity, `life` (± lifeJitter) sets lifetime.
-  emit(n, { pos = [0, 0], spread = 0, vel = [0, 0], velJitter = 0, life = 2, lifeJitter = 0 } = {}) {
+  emit(n, { pos = [0, 0], spread = 0, vel = [0, 0], velJitter = 0, life = 2, lifeJitter = 0,
+            z = 0, zSpread = 0, zVel = 0, zVelJitter = 0 } = {}) {
     const r = this.rand;
     for (let i = 0; i < n && this.count < this.capacity; i++) {
       const k = this.count++;
@@ -98,6 +103,8 @@ export class Field {
       this.pos[k * 2 + 1] = pos[1] + (r() - 0.5) * 2 * spread;
       this.vel[k * 2] = vel[0] + (r() - 0.5) * 2 * velJitter;
       this.vel[k * 2 + 1] = vel[1] + (r() - 0.5) * 2 * velJitter;
+      this.zpos[k] = z + (r() - 0.5) * 2 * zSpread;
+      this.zvel[k] = zVel + (r() - 0.5) * 2 * zVelJitter;
       this.life[k] = Math.max(0.0001, life + (r() - 0.5) * 2 * lifeJitter);
       this.age[k] = 0;
       this.phase[k] = r() * Math.PI * 2;                 // unique flutter phase
@@ -126,21 +133,34 @@ export class Field {
         const s = Math.sin(this.t * this.flutterFreq * Math.PI * 2 + phase[k]);
         vx += flutter * s * w * dt;
       }
-      if (vx0) {                                // tornado/updraft swirl around a centre
-        const dx = pos[k * 2] - vx0.center[0], dy = pos[k * 2 + 1] - vx0.center[1];
-        const r2 = dx * dx + dy * dy, inv = 1 / (Math.sqrt(r2) + 1e-3);
-        const st = vx0.strength;
-        vx += (-dy * inv * st - dx * inv * (vx0.inward || 0) * st) * dt;  // tangential + inward
-        vy += (dx * inv * st - dy * inv * (vx0.inward || 0) * st) * dt;
+      let vz = this.zvel[k];
+      if (vx0) {
+        const st = vx0.strength, inw = vx0.inward || 0;
+        if (vx0.axis === "y") {
+          // 3D tornado: swirl in the horizontal XZ plane around a VERTICAL axis.
+          // Front particles (z>cz) and back particles (z<cz) get opposite screen-X
+          // velocity → the column reads as a rotating 3D funnel. Optional updraft.
+          const dx = pos[k * 2] - vx0.center[0], dz = this.zpos[k] - (vx0.centerZ || 0);
+          const inv = 1 / (Math.sqrt(dx * dx + dz * dz) + 1e-3);
+          vx += (-dz * inv * st - dx * inv * inw * st) * dt;
+          vz += (dx * inv * st - dz * inv * inw * st) * dt;
+          if (vx0.updraft) vy += vx0.updraft * dt;
+        } else {                                // 2D point swirl in the screen plane
+          const dx = pos[k * 2] - vx0.center[0], dy = pos[k * 2 + 1] - vx0.center[1];
+          const inv = 1 / (Math.sqrt(dx * dx + dy * dy) + 1e-3);
+          vx += (-dy * inv * st - dx * inv * inw * st) * dt;
+          vy += (dx * inv * st - dy * inv * inw * st) * dt;
+        }
       }
       // per-particle drag (wobble as a size/mass proxy): lighter particles are
       // dragged harder → they fall slower, so a field shows a spread of speeds
       // instead of one uniform terminal velocity.
       const pdamp = Math.max(0, 1 - drag * (2 - w) * dt);
-      vx *= pdamp; vy *= pdamp;
-      vel[k * 2] = vx; vel[k * 2 + 1] = vy;
+      vx *= pdamp; vy *= pdamp; vz *= pdamp;
+      vel[k * 2] = vx; vel[k * 2 + 1] = vy; this.zvel[k] = vz;
       pos[k * 2] += vx * dt;                    // integrate position
       pos[k * 2 + 1] += vy * dt;
+      this.zpos[k] += vz * dt;
     }
     this.#ageAndCull(dt);
     // TODO M2 SPH-lite: build uniform-grid neighbour hash over `pos`, then
@@ -162,6 +182,7 @@ export class Field {
           this.vel[k * 2] = this.vel[last * 2]; this.vel[k * 2 + 1] = this.vel[last * 2 + 1];
           this.life[k] = this.life[last]; this.age[k] = this.age[last];
           this.phase[k] = this.phase[last]; this.spin[k] = this.spin[last]; this.wobble[k] = this.wobble[last];
+          this.zpos[k] = this.zpos[last]; this.zvel[k] = this.zvel[last];
         }
         k--; // re-test the swapped-in particle
       }
@@ -176,4 +197,8 @@ export class Field {
   // per-particle visual rotation (radians) for host renderers that draw a
   // tumbling sprite — spin[k] is the rate, phase[k] the offset.
   angle(k) { return this.phase[k] + this.spin[k] * this.age[k]; }
+  // depth axis (0 = window plane, >0 toward viewer, <0 behind). Hosts project
+  // it to size/alpha/parallax and painter-sort by z for a 3D look.
+  z(k) { return this.zpos[k]; }
+  get depths() { return this.zpos.subarray(0, this.count); }
 }
