@@ -176,5 +176,15 @@ function run(opts, emitOpts, steps = 120, n = 500) {
   ok(JSON.stringify(run()) === JSON.stringify(run()), '3D tornado is deterministic');
 }
 
+// 15) bounds is reserved (M3): passing it has no effect yet (no collision/cull)
+{
+  const f = new Field({ gravity: [0, -2], bounds: [-10, -10, 10, 10], seed: 1 });
+  f.emit(10, { pos: [0, 5], spread: 1, life: 2 });
+  for (let i = 0; i < 60; i++) f.step(1 / 60);
+  // particles freely leave the bounds (no collision yet) — fix this contract
+  ok(allFinite(f), 'bounds is reserved (M3) and has no effect in M1');
+  ok(f.count === 10, 'bounds does not cull particles in M1 (reserved argument)');
+}
+
 console.log(`swarm M1: ${pass} passed${fail ? `, ${fail} failed` : ''}`);
 process.exit(fail ? 1 : 0);
