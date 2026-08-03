@@ -36,10 +36,15 @@ Same `pos`/`vel` buffers, same `step(dt)` loop; SPH-lite is extra passes inside
 - **Forces**
   - *gravity* — constant `[gx, gy]`; sign/magnitude select smoke (small +/−) vs
     splash (large −).
-  - *drag* — `v *= (1 − drag·dt)`, dt-stable exponential-ish damping (air).
+  - *drag* — dt-stable exponential-ish damping (air); the per-particle `wobble`
+    trait slightly varies the damping so particles do not share one terminal speed.
   - *wind / curl-ish noise* — a deterministic sum of incommensurate sines (no
     noise table, **no `Math.random`**) giving organic, non-repeating swirl. This
     is what makes smoke/snow read as *alive* instead of a flat constant push.
+  - *flutter* — optional per-particle lateral sway with a seeded phase, for
+    falling petals/leaves.
+  - *vortex* — optional 2D point swirl or `axis: "y"` XZ tornado with updraft;
+    the latter uses the optional depth axis without changing the 2D buffer layout.
 - **Neighbour search (M2)** — a **uniform grid** spatial hash over `pos`: bucket
   each particle into a cell of side ≈ the SPH smoothing radius `h`, then each
   particle only tests its 3×3 (2D) cell neighbourhood — O(N) instead of O(N²).
@@ -47,8 +52,10 @@ Same `pos`/`vel` buffers, same `step(dt)` loop; SPH-lite is extra passes inside
   layout changes.
 - **Emitters** — `emit(n, opts)` spawns `n` particles from a point with **seeded**
   jitter on position (`spread`), velocity (`vel` + `velJitter`) and lifetime
-  (`life` + `lifeJitter`). All randomness comes from the field's seeded PRNG, so
-  an emit is byte-reproducible. Lifetime drives fade-in/out via `age`/`life`.
+  (`life` + `lifeJitter`), plus optional depth (`z`, `zSpread`, `zVel`,
+  `zVelJitter`). All randomness comes from the field's seeded PRNG, so an emit is
+  byte-reproducible. Lifetime drives fade-in/out via `age`/`life`; `phase`,
+  `spin` and `wobble` are per-particle host/motion traits.
 - **Collision (M3)** — particles vs simple colliders: a ground **plane** and an
   axis-aligned **box** (`bounds`). On contact, reflect the normal velocity with a
   restitution + friction coefficient so particles **bounce** then **settle**
@@ -71,7 +78,11 @@ const field = new Field({
   gravity: [0, -9.8],   // m/s^2; small for smoke/snow, large for splash
   drag: 0.1,            // air damping / s
   windAmp: 1.5,         // curl-ish wind strength (0 = still)
-  bounds: null,         // [minX,minY,maxX,maxY] for M3 collision/cull
+  windScale: 1.0,       // wind wavelength in world units
+  flutter: 0.0,         // lateral petal/leaf sway (0 = off)
+  flutterFreq: 1.2,     // sway oscillations per second
+  vortex: null,          // optional 2D swirl or { axis: "y", ... } tornado
+  bounds: null,         // reserved for M3 collision/cull; currently unused
   seed: 42,             // deterministic emit + replay
   capacity: 8192,       // pre-sized buffers (never grow mid-step)
 });
@@ -85,16 +96,18 @@ field.count;            // live particle count
 ```
 
 - `new Field(opts)` — a simulation domain.
-- `field.emit(n, { pos, spread, vel, velJitter, life, lifeJitter })` — seeded spawn.
+- `field.emit(n, { pos, spread, vel, velJitter, life, lifeJitter, z, zSpread, zVel, zVelJitter })` — seeded spawn with optional depth.
 - `field.step(dt)` — advance one fixed step.
 - `field.positions` / `field.velocities` — flat live-particle views; `field.count`.
+  `ages`, `lives`, `depths`, `angle(k)` and `z(k)` expose additional host data.
 - `mulberry32(seed)` — the seeded PRNG, exported for hosts that want the same stream.
 
 ## Milestones
 
 - **M1 (done)** particle buffers + integrate + basic forces (gravity / drag /
-  curl-ish wind = smoke / snow / petal drift), seeded-deterministic emit, lifetime
-  cull. *All in `index.js`.*
+  curl-ish wind = smoke / snow / petal drift), optional flutter/vortex motion,
+  seeded-deterministic emit, lifetime cull and optional z integration. *All in
+  `index.js`.*
 - **M2** SPH-lite: uniform-grid neighbour search → density → pressure → viscosity
   (water splash / pool).
 - **M3** collision vs ground plane / box: bounce + settle (`bounds`, restitution,

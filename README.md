@@ -31,10 +31,10 @@ for (let k = 0; k < field.count; k++) {
 
 ## API
 
-- `new Field({ gravity, drag, windAmp, bounds, seed, capacity })` → a sim domain.
-- `field.emit(n, { pos, spread, vel, velJitter, life, lifeJitter })` — seeded, deterministic spawn with per-particle jitter and lifetime.
-- `field.step(dt)` — one fixed step: forces (gravity / drag / curl-ish wind) → integrate → age & cull.
-- `field.positions` / `field.velocities` — flat `[x0,y0, x1,y1, …]` views of the **live** particles; `field.count` is the live count.
+- `new Field({ gravity, drag, windAmp, windScale, flutter, flutterFreq, vortex, bounds, seed, capacity })` → a sim domain. `bounds` is reserved for the M3 collision milestone and currently has no effect.
+- `field.emit(n, { pos, spread, vel, velJitter, life, lifeJitter, z, zSpread, zVel, zVelJitter })` — seeded, deterministic spawn with per-particle jitter, lifetime and optional depth.
+- `field.step(dt)` — one fixed step: forces (gravity / drag / curl-ish wind / optional flutter / vortex) → integrate → age & cull.
+- `field.positions` / `field.velocities` — flat `[x0,y0, x1,y1, …]` views of the **live** particles; `field.count` is the live count. `field.ages`, `field.lives`, `field.depths`, `field.angle(k)` and `field.z(k)` expose additional host data.
 - `mulberry32(seed)` — the seeded PRNG, exported so hosts can share the stream.
 
 See [DESIGN.md](./DESIGN.md) for the architecture, the two regimes, and the M1–M4 plan.
@@ -61,7 +61,9 @@ different field).
 ## Status
 
 **M1** — particle buffers + integrate + basic forces (gravity / drag / curl-ish
-wind = smoke / snow / petal drift), seeded-deterministic emit + lifetime cull.
+wind = smoke / snow / petal drift), optional flutter/vortex motion,
+seeded-deterministic emit + lifetime cull. The optional z axis is integrated for
+host-side 3D presentation; `positions` remains a 2D flat buffer.
 Roadmap: **M2** SPH-lite (uniform grid → pressure + viscosity = water/splash) ·
 **M3** collision vs plane/box (bounce + settle) · **M4** host wiring (upgrade
 [netmahg](https://github.com/opaopa6969/netmahg)'s seasonal ambient particles +
