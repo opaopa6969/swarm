@@ -1,0 +1,125 @@
+{
+  "repo": "swarm",
+  "surveyed_at": "2026-08-22T00:00:00Z",
+  "kind": "library",
+  "summary": "純粋 ESM・零依存・単ファイルの粒子／軽量流体シミュレーションエンジン。重力・ドラッグ・風・ flutter・渦で数千粒子を決定論的に駆動し、flat typed-array buffer を host renderer に渡す。M1 完了、M2 SPH-lite と M3 collision は TODO。",
+  "decision": "skip",
+  "decision_reason": "純粋ライブラリ（in-process import 前提・零依存・単ファイル 229 行）で、各操作は sub-ms。HTTP ラップのコストが計算自体を超える。出力は Float64Array の flat positions で、renderer なしでは agent に actional でない。sibling 3 エンジン（motion-engine, xpbd-body, swarm）全て volta 未登録＝import 型ライブラリという一貫パターン。netmahg M4 host wiring では直接 import が適切（MCP 越しでない）。",
+  "existing": {
+    "http_api": false,
+    "cli": false,
+    "mcp": false,
+    "healthz": false,
+    "volta_manifest": false,
+    "hosted_url": null
+  },
+  "proposed_namespace": null,
+  "capabilities": [
+    {
+      "verb": "粒子を生成する",
+      "kind": "tool",
+      "name": "emit",
+      "io": "{n, pos, spread, vel, velJitter, life, lifeJitter, z, zSpread, zVel, zVelJitter} → count",
+      "side_effect": "write",
+      "long_running": false,
+      "maps_to": "index.js:106 Field.emit()"
+    },
+    {
+      "verb": "粒子を1ステップ進める",
+      "kind": "tool",
+      "name": "step",
+      "io": "dt → positions/velocities/lives/ages 更新",
+      "side_effect": "write",
+      "long_running": false,
+      "maps_to": "index.js:128 Field.step()"
+    },
+    {
+      "verb": "粒子位置を取得する",
+      "kind": "tool",
+      "name": "positions",
+      "io": "void → Float64Array [x0,y0, x1,y1, ...]",
+      "side_effect": "read",
+      "long_running": false,
+      "maps_to": "index.js:218 Field.positions getter"
+    },
+    {
+      "verb": "ベンチマークを実行する",
+      "kind": "tool",
+      "name": "bench",
+      "io": "[warmupSteps] [measureSteps] [particles] → {ns_per_particle_step, ...}",
+      "side_effect": "read",
+      "long_running": true,
+      "maps_to": "bench.mjs:42 scenario()"
+    },
+    {
+      "verb": "能力の仕様",
+      "kind": "resource",
+      "name": "spec",
+      "uri": "swarm://spec"
+    },
+    {
+      "verb": "使い方",
+      "kind": "resource",
+      "name": "guide",
+      "uri": "swarm://guide"
+    },
+    {
+      "verb": "エンジン設計とマイルストーン",
+      "kind": "resource",
+      "name": "design",
+      "uri": "swarm://design"
+    },
+    {
+      "verb": "粒子エフェクトの組み立て方",
+      "kind": "skill",
+      "name": "particle-effect-recipe",
+      "locality": "repo"
+    }
+  ],
+  "composition_examples": [
+    "swarm__step → showcase__search_cases（パーティクル演出に合う映像表現を検索）— ただし swarm は in-process import が前提なので、MCP 越しの組合せは非現実的",
+    "swarm__emit + swarm__step を netmahg の勝利演出に組み込む — これは MCP ではなく直接 import で行うべき（M4 計画通り）",
+    "swarm__bench → kamishibai__validate のようにベンチ結果を動画化 — しかしベンチ自体は node bench.mjs で十分"
+  ],
+  "dependencies": [
+    {
+      "repo": "netmahg",
+      "direction": "provides_to",
+      "capability": "Field / emit / step（M4 host wiring で季節演出・勝利バースト・水しぶきに使用）",
+      "exists_now": true,
+      "note": "netmahg は volta 登録済み（https://mahjong.unlaxer.org）だが MCP なし。swarm は直接 import される設計。"
+    },
+    {
+      "repo": "motion-engine",
+      "direction": "provides_to",
+      "capability": "sibling engine — 独立リポジトリ、volt 未登録",
+      "exists_now": false,
+      "note": "motion-engine と xpbd-body は共に in-process import 型ライブラリ。volta/MCP 化の予定なし。"
+    },
+    {
+      "repo": "xpbd-body",
+      "direction": "provides_to",
+      "capability": "sibling engine — 独立リポジトリ、volta 未登録",
+      "exists_now": false,
+      "note": "同上"
+    }
+  ],
+  "library_serve": {
+    "needed": false,
+    "new_work": [],
+    "runtime": "node",
+    "estimated_effort": "S"
+  },
+  "risks": [
+    "出力が Float64Array の flat positions で renderer なしでは agent に actional でない — MCP tool が返しても描画手段がない",
+    "各操作が sub-ms なので HTTP/Serde ラップのオーバーヘッドが計算自体を超える — 常駐サーバ化の性能利点がない",
+    "決定論性（seeded PRNG + fixed dt）は in-process import でこそ意味がある — MCP 越しだと stateless 呼出のたびに Field を再構築する必要があり、state 管理が複雑化する",
+    "M2 SPH-lite / M3 collision が未実装 — これらが完了する前に MCP 化しても価値が薄い",
+    "ライセンス: MIT（問題なし）",
+    "秘密情報・外部 API 課金・破壊的操作: なし（純粋計算ライブラリ）"
+  ],
+  "open_questions": [
+    "M2 SPH-lite 完了後に再評価する価値があるか？ — 水しぶきシミュレーションを agent から叩ける意義は、renderer 連携が MCP で解決できない限り薄い",
+    "sibling engine 群（motion-engine, xpbd-body）を含めて「ゲームエンジン群の MCP ファサード」を作る構想はあるか？ — 個別サーバ化より統合入口の方が意味がある可能性"
+  ]
+}
