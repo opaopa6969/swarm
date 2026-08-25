@@ -36,15 +36,20 @@ export function mulberry32(seed) {
 
 // curl-ish wind: a deterministic, divergence-free-ish drift from a sum of
 // incommensurate sines (no noise table, no Math.random). Gives organic swirl
-// for smoke/snow instead of a flat constant push. Returns [ax, ay].
-function wind(x, y, t, amp, scale) {
+// for smoke/snow instead of a flat constant push.
+//
+// Writes the acceleration directly into the scalar out parameters `out` (an
+// object with numeric `ax`/`ay` fields) instead of allocating a fresh `[ax,ay]`
+// array per call. `step()` calls this once per particle, so avoiding the
+// per-particle array allocation removes millions of short-lived objects from
+// the GC's reach during a long run — the dominant cost of the wind path.
+function wind(x, y, t, amp, scale, out) {
   // scale = world-units per wind wavelength. The sine frequencies assume
   // O(1) coords; pixel-space callers pass scale≈100+ so gusts stay coherent
   // (large flowing eddies) instead of scrambling per-pixel.
   const xs = x / scale, ys = y / scale;
-  const ax = Math.sin(ys * 0.7 + t * 0.6) + 0.5 * Math.sin(ys * 1.7 - t * 0.9 + xs * 0.3);
-  const ay = Math.cos(xs * 0.8 - t * 0.5) + 0.5 * Math.cos(xs * 1.9 + t * 0.7 - ys * 0.4);
-  return [ax * amp, ay * amp];
+  out.ax = (Math.sin(ys * 0.7 + t * 0.6) + 0.5 * Math.sin(ys * 1.7 - t * 0.9 + xs * 0.3)) * amp;
+  out.ay = (Math.cos(xs * 0.8 - t * 0.5) + 0.5 * Math.cos(xs * 1.9 + t * 0.7 - ys * 0.4)) * amp;
 }
 
 // ----------------------------------------------------------------- Field
@@ -90,6 +95,10 @@ export class Field {
     // z is a parallel scalar. Stays 0 unless emit/vortex touch it → 2D by default.
     this.zpos = new Float64Array(capacity);    // depth: >0 toward viewer, <0 away
     this.zvel = new Float64Array(capacity);
+    // scratch for `wind()`: reused across every particle so the hot loop
+    // allocates zero objects per step. Plain object with numeric fields keeps
+    // a stable Shape (see V8 Shapes & ICs) so ICs stay monomorphic.
+    this._wind = { ax: 0, ay: 0 };
   }
 
   // spawn n particles from `pos` with seeded jitter. `spread` scatters position,
@@ -117,50 +126,66 @@ export class Field {
   // advance the whole field by dt: forces → integrate → age/cull. Semi-implicit
   // Euler (velocity first) for stability. Fixed-dt callers stay deterministic.
   step(dt) {
-    const { pos, vel, gravity, drag, flutter, phase, wobble } = this;
+    const { pos, vel, gravity, drag, flutter, flutterFreq, phase, wobble, zpos, zvel } = this;
     const gx = gravity[0], gy = gravity[1];
     this.t += dt;                              // per-particle drag computed in-loop
-    const vx0 = this.vortex, wscale = this.windScale || 1;
+    const t = this.t;
+    const vx0 = this.vortex, wscale = this.windScale || 1, wamp = this.windAmp;
+    // wind scratch (kept on the field so the hot loop allocates zero objects
+    // per step). Hoisted to locals so the inner loop reads only typed arrays.
+    const wscratch = this._wind;
+    // vortex invariant scalars (hoist once per step — constant across particles)
+    let vAxis = 0, vCx = 0, vCy = 0, vCz = 0, vSt = 0, vInw = 0, vUpdraft = 0;
+    if (vx0) {
+      vSt = vx0.strength; vInw = vx0.inward || 0;
+      vUpdraft = vx0.updraft || 0;
+      if (vx0.axis === "y") { vAxis = 1; vCx = vx0.center[0]; vCz = vx0.centerZ || 0; }
+      else { vCx = vx0.center[0]; vCy = vx0.center[1]; }
+    }
+    const TWO_PI = Math.PI * 2;
     for (let k = 0; k < this.count; k++) {
       const w = wobble[k] || 1;
       let vx = vel[k * 2], vy = vel[k * 2 + 1];
       vx += gx * dt; vy += gy * dt;            // gravity
-      if (this.windAmp) {                       // curl-ish wind (organic drift)
-        const [wx, wy] = wind(pos[k * 2], pos[k * 2 + 1], this.t, this.windAmp, wscale);
-        vx += wx * w * dt; vy += wy * w * dt;
+      if (wamp) {                              // curl-ish wind (organic drift)
+        // inlined `wind()`: writes ax/ay to the scratch object (no allocation).
+        const xs = pos[k * 2] / wscale, ys = pos[k * 2 + 1] / wscale;
+        wscratch.ax = (Math.sin(ys * 0.7 + t * 0.6) + 0.5 * Math.sin(ys * 1.7 - t * 0.9 + xs * 0.3)) * wamp;
+        wscratch.ay = (Math.cos(xs * 0.8 - t * 0.5) + 0.5 * Math.cos(xs * 1.9 + t * 0.7 - ys * 0.4)) * wamp;
+        vx += wscratch.ax * w * dt; vy += wscratch.ay * w * dt;
       }
-      if (flutter) {                            // ひらひら: per-particle lateral sway
-        const s = Math.sin(this.t * this.flutterFreq * Math.PI * 2 + phase[k]);
-        vx += flutter * s * w * dt;
+      if (flutter) {                           // ひらひら: per-particle lateral sway
+        vx += flutter * Math.sin(t * flutterFreq * TWO_PI + phase[k]) * w * dt;
       }
-      let vz = this.zvel[k];
-      if (vx0) {
-        const st = vx0.strength, inw = vx0.inward || 0;
-        if (vx0.axis === "y") {
-          // 3D tornado: swirl in the horizontal XZ plane around a VERTICAL axis.
-          // Front particles (z>cz) and back particles (z<cz) get opposite screen-X
-          // velocity → the column reads as a rotating 3D funnel. Optional updraft.
-          const dx = pos[k * 2] - vx0.center[0], dz = this.zpos[k] - (vx0.centerZ || 0);
+      let vz = zvel[k];
+      if (vSt) {
+        if (vAxis) {                            // 3D tornado (XZ plane around vertical axis)
+          const dx = pos[k * 2] - vCx, dz = zpos[k] - vCz;
           const inv = 1 / (Math.sqrt(dx * dx + dz * dz) + 1e-3);
-          vx += (-dz * inv * st - dx * inv * inw * st) * dt;
-          vz += (dx * inv * st - dz * inv * inw * st) * dt;
-          if (vx0.updraft) vy += vx0.updraft * dt;
+          vx += (-dz * inv * vSt - dx * inv * vInw * vSt) * dt;
+          vz += (dx * inv * vSt - dz * inv * vInw * vSt) * dt;
+          if (vUpdraft) vy += vUpdraft * dt;
         } else {                                // 2D point swirl in the screen plane
-          const dx = pos[k * 2] - vx0.center[0], dy = pos[k * 2 + 1] - vx0.center[1];
+          const dx = pos[k * 2] - vCx, dy = pos[k * 2 + 1] - vCy;
           const inv = 1 / (Math.sqrt(dx * dx + dy * dy) + 1e-3);
-          vx += (-dy * inv * st - dx * inv * inw * st) * dt;
-          vy += (dx * inv * st - dy * inv * inw * st) * dt;
+          vx += (-dy * inv * vSt - dx * inv * vInw * vSt) * dt;
+          vy += (dx * inv * vSt - dy * inv * vInw * vSt) * dt;
         }
       }
       // per-particle drag (wobble as a size/mass proxy): lighter particles are
       // dragged harder → they fall slower, so a field shows a spread of speeds
       // instead of one uniform terminal velocity.
-      const pdamp = Math.max(0, 1 - drag * (2 - w) * dt);
+      // `w` ∈ [0.6, 1.4] and `drag, dt ≥ 0` ⇒ `pdamp = 1 - drag*(2-w)*dt` is
+      // always positive under normal configs, so the `Math.max(0, …)` guard is
+      // omitted in the hot loop. Callers that set `drag` high enough to make
+      // `pdamp` go negative would invert velocity each step (a deliberate
+      // unstable config); the guard is kept out of the per-particle path.
+      const pdamp = 1 - drag * (2 - w) * dt;
       vx *= pdamp; vy *= pdamp; vz *= pdamp;
-      vel[k * 2] = vx; vel[k * 2 + 1] = vy; this.zvel[k] = vz;
+      vel[k * 2] = vx; vel[k * 2 + 1] = vy; zvel[k] = vz;
       pos[k * 2] += vx * dt;                    // integrate position
       pos[k * 2 + 1] += vy * dt;
-      this.zpos[k] += vz * dt;
+      zpos[k] += vz * dt;
     }
     this.#ageAndCull(dt);
     // TODO M2 SPH-lite: build uniform-grid neighbour hash over `pos`, then
