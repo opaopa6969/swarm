@@ -45,6 +45,10 @@ Same `pos`/`vel` buffers, same `step(dt)` loop; SPH-lite is extra passes inside
     falling petals/leaves.
   - *vortex* — optional 2D point swirl or `axis: "y"` XZ tornado with updraft;
     the latter uses the optional depth axis without changing the 2D buffer layout.
+    Shape: `{ center:[x,y], strength, inward }` for 2D, or
+    `{ axis: "y", center:[x,y], centerZ, strength, inward, updraft }` for a 3D
+    tornado — `centerZ` locates the swirl in the depth axis and `updraft` adds a
+    vertical velocity component per step.
 - **Neighbour search (M2)** — a **uniform grid** spatial hash over `pos`: bucket
   each particle into a cell of side ≈ the SPH smoothing radius `h`, then each
   particle only tests its 3×3 (2D) cell neighbourhood — O(N) instead of O(N²).

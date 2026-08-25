@@ -1,6 +1,6 @@
 # swarm
 
-> A large-count particle / lightweight-fluid engine for visual effects — **smoke, snow, falling petals and water/splash, from one tiny pure core.**
+> A large-count particle / lightweight-fluid engine for visual effects — **smoke, snow, falling petals from one tiny pure core**, with water/splash (SPH-lite) planned at M2.
 
 Drives *thousands* of particles cheaply and **deterministically** out of flat,
 typed-array-friendly `pos`/`vel` buffers. Two regimes share one substrate: cheap
@@ -31,7 +31,7 @@ for (let k = 0; k < field.count; k++) {
 
 ## API
 
-- `new Field({ gravity, drag, windAmp, windScale, flutter, flutterFreq, vortex, bounds, seed, capacity })` → a sim domain. `bounds` is reserved for the M3 collision milestone and currently has no effect.
+- `new Field({ gravity, drag, windAmp, windScale, flutter, flutterFreq, vortex, bounds, seed, capacity })` → a sim domain. `bounds` is reserved for the M3 collision milestone and currently has no effect. `vortex` is either `null` or an object shaped `{ center:[x,y], strength, inward }` for a 2D screen-plane swirl, or `{ axis:"y", center:[x,y], centerZ, strength, inward, updraft }` for a 3D XZ-plane tornado with optional vertical updraft (uses the optional depth axis without changing the 2D buffer layout).
 - `field.emit(n, { pos, spread, vel, velJitter, life, lifeJitter, z, zSpread, zVel, zVelJitter })` — seeded, deterministic spawn with per-particle jitter, lifetime and optional depth.
 - `field.step(dt)` — one fixed step: forces (gravity / drag / curl-ish wind / optional flutter / vortex) → integrate → age & cull.
 - `field.positions` / `field.velocities` — flat `[x0,y0, x1,y1, …]` views of the **live** particles; `field.count` is the live count. `field.ages`, `field.lives`, `field.depths`, `field.angle(k)` and `field.z(k)` expose additional host data.
@@ -57,6 +57,20 @@ Headless proof: emit raises the count, particles fall under gravity, everything
 stays finite under gravity + drag + wind, lifetimes cull correctly, and the field
 is **deterministic** (same seed → byte-identical positions, different seed →
 different field).
+
+## Benchmark
+
+```sh
+node --expose-gc bench.mjs [warmupSteps] [measureSteps] [particles]
+```
+
+Reproducible micro-benchmark for the `step(dt)` hot loop. Five scenarios
+(gravity+drag, +wind, +flutter, +vortex2d, +vortex3d) each run in a fresh `Field`
+with a warmup window (default 200) so V8 TurboFan tiers up, then a measured
+window (default 2000 steps at 8000 particles). Emits one JSON line with
+`ns_per_particle_step` (primary), `ns_per_step` and `steps_per_sec` per
+scenario. See `docs/engine-benchmark-2026-08-16.md` for the baseline + 3-iteration
+optimization log and external sources.
 
 ## Status
 
