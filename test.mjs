@@ -211,5 +211,25 @@ function run(opts, emitOpts, steps = 120, n = 500) {
   ok(f.count === 10, 'bounds does not cull particles in M1 (reserved argument)');
 }
 
+// 15b) windScale: 0 is respected (no silent || 1 coercion); property == behaviour (issue #15)
+{
+  const mk = (ws) => {
+    const f = new Field({ windScale: ws, windAmp: 5, gravity: [0, 0], drag: 0, seed: 1 });
+    f.emit(1, { pos: [100, 100], life: 5 });
+    f.step(1 / 60);
+    return [f.velocities[0], f.velocities[1]];
+  };
+  const z = mk(0), one = mk(1);
+  ok(z[0] === 0 && z[1] === 0, 'windScale=0 disables wind (no silent 1 coercion)');
+  ok(one[0] !== 0, 'windScale=1 still applies wind (regression)');
+  const f = new Field({ windScale: 0, windAmp: 5, seed: 1 });
+  ok(f.windScale === 0, 'field.windScale stays 0 (no property/behaviour divergence)');
+  // windScale=0 with windAmp>0 stays finite (no NaN from x/0) for many steps
+  const g = new Field({ windScale: 0, windAmp: 5, gravity: [0, 0], drag: 0, seed: 1 });
+  g.emit(20, { pos: [0, 0], spread: 5, life: 10 });
+  for (let i = 0; i < 600; i++) g.step(1 / 60);
+  ok(allFinite(g), 'windScale=0 + windAmp>0 stays finite over 600 steps (no NaN)');
+}
+
 console.log(`swarm M1: ${pass} passed${fail ? `, ${fail} failed` : ''}`);
 process.exit(fail ? 1 : 0);

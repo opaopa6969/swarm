@@ -48,7 +48,7 @@ export interface FieldOptions {
   drag?: number;
   /** Curl-ish wind strength (0 = still air). Default 0. */
   windAmp?: number;
-  /** World-units per wind wavelength. Default 1. */
+  /** World-units per wind wavelength. A value ≤ 0 disables wind (same as windAmp: 0). Default 1. */
   windScale?: number;
   /** Per-particle lateral sway amplitude (petals/leaves). Default 0. */
   flutter?: number;
