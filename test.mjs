@@ -231,5 +231,108 @@ function run(opts, emitOpts, steps = 120, n = 500) {
   ok(allFinite(g), 'windScale=0 + windAmp>0 stays finite over 600 steps (no NaN)');
 }
 
+// 16) step(0) is a no-op: zero advancement neither moves nor ages any particle
+// (boundary dt — regression guard against a future 1/dt normalization or an
+// age/cull path that advances on dt==0).
+{
+  const f = new Field({ gravity: [0, -9.8], drag: 0.2, windAmp: 1.5, seed: 1 });
+  f.emit(50, { pos: [0, 5], spread: 1, vel: [0, 1], velJitter: 1, life: 2, lifeJitter: 0.5 });
+  const pos0 = [...f.positions];
+  const age0 = [...f.ages];
+  const life0 = [...f.lives];
+  const cnt0 = f.count;
+  for (let i = 0; i < 10; i++) f.step(0);   // ten zero-length steps
+  ok(f.count === cnt0, 'step(0) preserves the live count (no cull on zero time)');
+  ok(allFinite(f), 'step(0) keeps positions finite');
+  let moved = false, aged = false, lifeChanged = false;
+  for (let i = 0; i < f.count * 2; i++) if (f.positions[i] !== pos0[i]) moved = true;
+  for (let k = 0; k < f.count; k++) {
+    if (f.ages[k] !== age0[k]) aged = true;
+    if (f.lives[k] !== life0[k]) lifeChanged = true;
+  }
+  ok(!moved, 'step(0) does not move any particle (positions frozen)');
+  ok(!aged, 'step(0) does not age any particle');
+  ok(!lifeChanged, 'step(0) does not decrement any lifetime');
+}
+
+// 17) live views track count: positions/velocities/ages/lives/depths are subarray
+// views whose length follows count, including after a partial cull. Hosts read
+// `field.positions` + `field.count` and rely on `positions.length === count*2`.
+{
+  const f = new Field({ gravity: [0, 0], drag: 0, seed: 8 });
+  f.emit(10, { spread: 0, life: 1, lifeJitter: 0 });   // die at exactly 1s
+  f.emit(10, { spread: 0, life: 2, lifeJitter: 0 });   // die at exactly 2s
+  ok(f.count === 20, 'two emits bring count to 20');
+  ok(f.positions.length === f.count * 2, 'positions.length === count*2 before any cull');
+  ok(f.ages.length === f.count, 'ages.length === count before any cull');
+  for (let i = 0; i < 90; i++) f.step(1 / 60);          // 1.5s: first half dead, second alive
+  ok(f.count === 10, 'partial cull: exactly half culled (deterministic lifetimes)');
+  ok(f.positions.length === f.count * 2, 'positions.length === count*2 after partial cull');
+  ok(f.velocities.length === f.count * 2, 'velocities.length === count*2 after partial cull');
+  ok(f.ages.length === f.count, 'ages.length === count after partial cull');
+  ok(f.lives.length === f.count, 'lives.length === count after partial cull');
+  ok(f.depths.length === f.count, 'depths.length === count after partial cull');
+}
+
+// 18) a particle at the exact vortex centre stays finite — the 1e-3 epsilon in
+// `1/(r+1e-3)` is the div-by-zero guard; removing it would NaN every on-centre
+// particle (2D swirl centre and 3D tornado axis).
+{
+  const v2 = new Field({ gravity: [0, 0], drag: 0, seed: 1,
+    vortex: { center: [0, 0], strength: 100, inward: 5 } });
+  v2.emit(1, { pos: [0, 0], life: 5 });
+  for (let i = 0; i < 120; i++) v2.step(1 / 60);
+  ok(v2.count === 1, '2D centre particle is not lost');
+  ok(allFinite(v2), '2D vortex at exact centre stays finite (epsilon div-by-zero guard)');
+
+  const v3 = new Field({ gravity: [0, 0], drag: 0, seed: 1,
+    vortex: { axis: "y", center: [0, 0], centerZ: 0, strength: 100, inward: 5, updraft: 10 } });
+  v3.emit(1, { pos: [0, 0], z: 0, life: 5 });
+  for (let i = 0; i < 120; i++) v3.step(1 / 60);
+  ok(v3.count === 1, '3D on-axis particle is not lost');
+  ok(allFinite(v3), '3D tornado on-axis stays finite (epsilon div-by-zero guard)');
+}
+
+// 19) life is clamped to a tiny positive minimum: a lifeJitter larger than life
+// can push the computed life negative, but emit must not produce instant-death
+// (life<=0) particles. Removing the Math.max clamp would cull them on step 1.
+{
+  const f = new Field({ gravity: [0, 0], drag: 0, seed: 2 });
+  // life=0.1, lifeJitter=1 → computed life ∈ [-0.9, 1.1]; clamped to >= 0.0001
+  f.emit(200, { spread: 1, life: 0.1, lifeJitter: 1 });
+  ok(f.count === 200, 'emit spawns all 200 particles despite lifeJitter > life');
+  let allPos = true;
+  for (let k = 0; k < f.count; k++) {
+    if (!(Number.isFinite(f.lives[k]) && f.lives[k] > 0)) allPos = false;
+  }
+  ok(allPos, 'all emitted lives are finite & positive (clamped, no instant death)');
+  f.step(1e-5);   // a tiny step must not cull the clamped (>= 0.0001s) particles
+  ok(f.count > 0, 'particles survive a tiny step (clamp prevents instant cull)');
+}
+
+// 20) windScale ≤ 0 or non-finite disables wind: the guard `wscale > 0` keeps
+// `x/scale` from producing NaN. A future `!== 0` check or `|| 1` coercion would
+// let NaN/Infinity propagate into every position. Complements #15b (the 0 case).
+{
+  const mk = (ws) => {
+    const f = new Field({ windScale: ws, windAmp: 5, gravity: [0, 0], drag: 0, seed: 1 });
+    f.emit(1, { pos: [100, 100], life: 5 });
+    f.step(1 / 60);
+    return [f.velocities[0], f.velocities[1]];
+  };
+  const neg = mk(-1);
+  ok(neg[0] === 0 && neg[1] === 0, 'windScale < 0 disables wind (≤ 0 contract, no silent |1| coercion)');
+  const nan = mk(NaN);
+  ok(nan[0] === 0 && nan[1] === 0, 'windScale=NaN disables wind (non-finite guard, no NaN via x/NaN)');
+  // many steps with NaN windScale must not accumulate NaN into positions
+  const g = new Field({ windScale: NaN, windAmp: 5, gravity: [0, 0], drag: 0, seed: 1 });
+  g.emit(20, { pos: [0, 0], spread: 5, life: 10 });
+  for (let i = 0; i < 300; i++) g.step(1 / 60);
+  ok(allFinite(g), 'windScale=NaN + windAmp>0 stays finite over 300 steps (no NaN propagation)');
+  // the property is preserved as-is (property == behaviour, see issue #15)
+  const f = new Field({ windScale: NaN, seed: 1 });
+  ok(Number.isNaN(f.windScale), 'field.windScale preserves NaN (no silent coercion to a default)');
+}
+
 console.log(`swarm M1: ${pass} passed${fail ? `, ${fail} failed` : ''}`);
 process.exit(fail ? 1 : 0);
