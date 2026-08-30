@@ -158,18 +158,18 @@ export class Field {
         vx += flutter * Math.sin(t * flutterFreq * TWO_PI + phase[k]) * w * dt;
       }
       let vz = zvel[k];
-      if (vSt) {
+      if (vSt || vInw || vUpdraft) {
         if (vAxis) {                            // 3D tornado (XZ plane around vertical axis)
           const dx = pos[k * 2] - vCx, dz = zpos[k] - vCz;
           const inv = 1 / (Math.sqrt(dx * dx + dz * dz) + 1e-3);
-          vx += (-dz * inv * vSt - dx * inv * vInw * vSt) * dt;
-          vz += (dx * inv * vSt - dz * inv * vInw * vSt) * dt;
+          if (vSt)   { vx += -dz * inv * vSt * dt;            vz += dx * inv * vSt * dt; }
+          if (vInw)  { vx += -dx * inv * vInw * dt;           vz += -dz * inv * vInw * dt; }
           if (vUpdraft) vy += vUpdraft * dt;
         } else {                                // 2D point swirl in the screen plane
           const dx = pos[k * 2] - vCx, dy = pos[k * 2 + 1] - vCy;
           const inv = 1 / (Math.sqrt(dx * dx + dy * dy) + 1e-3);
-          vx += (-dy * inv * vSt - dx * inv * vInw * vSt) * dt;
-          vy += (dx * inv * vSt - dy * inv * vInw * vSt) * dt;
+          if (vSt)   { vx += -dy * inv * vSt * dt;            vy += dx * inv * vSt * dt; }
+          if (vInw)  { vx += -dx * inv * vInw * dt;           vy += -dy * inv * vInw * dt; }
         }
       }
       // per-particle drag (wobble as a size/mass proxy): lighter particles are
