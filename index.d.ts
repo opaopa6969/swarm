@@ -67,7 +67,7 @@ export interface FieldOptions {
 export interface EmitOptions {
   /** Spawn origin. Default [0, 0]. */
   pos?: [number, number];
-  /** Position scatter radius. Default 0. */
+  /** Position scatter full extent (range [-spread, +spread] about pos). Default 0. */
   spread?: number;
   /** Initial velocity. Default [0, 0]. */
   vel?: [number, number];
