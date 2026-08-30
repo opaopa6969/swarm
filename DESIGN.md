@@ -57,9 +57,11 @@ Same `pos`/`vel` buffers, same `step(dt)` loop; SPH-lite is extra passes inside
 - **Emitters** — `emit(n, opts)` spawns `n` particles from a point with **seeded**
   jitter on position (`spread`), velocity (`vel` + `velJitter`) and lifetime
   (`life` + `lifeJitter`), plus optional depth (`z`, `zSpread`, `zVel`,
-  `zVelJitter`). All randomness comes from the field's seeded PRNG, so an emit is
-  byte-reproducible. Lifetime drives fade-in/out via `age`/`life`; `phase`,
-  `spin` and `wobble` are per-particle host/motion traits.
+  `zVelJitter`). Every jitter/scatter parameter is a **full extent**: the value
+  `s` produces a uniform draw in `[-s, +s]` (so `spread: 2` scatters across a 4-unit
+  span, not a radius-2 disc). All randomness comes from the field's seeded PRNG,
+  so an emit is byte-reproducible. Lifetime drives fade-in/out via `age`/`life`;
+  `phase`, `spin` and `wobble` are per-particle host/motion traits.
 - **Collision (M3)** — particles vs simple colliders: a ground **plane** and an
   axis-aligned **box** (`bounds`). On contact, reflect the normal velocity with a
   restitution + friction coefficient so particles **bounce** then **settle**
