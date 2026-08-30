@@ -133,6 +133,31 @@ function run(opts, emitOpts, steps = 120, n = 500) {
   ok(Math.abs(a1 - a0) > 0.05, 'vortex swirls particles around its centre');
 }
 
+// 11b) vortex inward/updraft act independently of strength (issue #13)
+{
+  // 2D: strength=0, inward>0 pulls the particle toward the centre
+  const s = new Field({ gravity: [0, 0], drag: 0, seed: 1,
+    vortex: { center: [0, 0], strength: 0, inward: 1 } });
+  s.emit(1, { pos: [100, 0], life: 5 });
+  for (let i = 0; i < 60; i++) s.step(1 / 60);
+  ok(s.positions[0] < 100, '2D inward pulls particle toward centre even when strength is 0');
+
+  // 3D: strength=0, updraft>0 lifts the particle
+  const u = new Field({ gravity: [0, 0], drag: 0, seed: 1,
+    vortex: { axis: "y", center: [0, 0], strength: 0, inward: 0, updraft: 20 } });
+  u.emit(1, { pos: [0, 0], z: 0, life: 5 });
+  for (let i = 0; i < 60; i++) u.step(1 / 60);
+  ok(u.positions[1] > 0, '3D updraft lifts particle even when strength is 0');
+
+  // all-zero vortex is a no-op (no spurious motion)
+  const z = new Field({ gravity: [0, 0], drag: 0, seed: 1,
+    vortex: { center: [0, 0], strength: 0, inward: 0, updraft: 0 } });
+  z.emit(1, { pos: [100, 0], life: 5 });
+  for (let i = 0; i < 60; i++) z.step(1 / 60);
+  ok(Math.abs(z.positions[0] - 100) < 1e-9 && Math.abs(z.positions[1]) < 1e-9,
+     'all-zero vortex is a no-op (no spurious motion)');
+}
+
 // 12) per-particle traits survive cull (swap keeps phase/spin/wobble aligned)
 {
   const f = new Field({ capacity: 50, flutter: 10, seed: 7 });
