@@ -84,7 +84,7 @@ const field = new Field({
   gravity: [0, -9.8],   // m/s^2; small for smoke/snow, large for splash
   drag: 0.1,            // air damping / s
   windAmp: 1.5,         // curl-ish wind strength (0 = still)
-  windScale: 1.0,       // wind wavelength in world units
+  windScale: 1.0,       // wind wavelength in world units (≤ 0 disables wind)
   flutter: 0.0,         // lateral petal/leaf sway (0 = off)
   flutterFreq: 1.2,     // sway oscillations per second
   vortex: null,          // optional 2D swirl or { axis: "y", ... } tornado

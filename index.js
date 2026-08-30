@@ -130,10 +130,15 @@ export class Field {
     const gx = gravity[0], gy = gravity[1];
     this.t += dt;                              // per-particle drag computed in-loop
     const t = this.t;
-    const vx0 = this.vortex, wscale = this.windScale || 1, wamp = this.windAmp;
+    const vx0 = this.vortex, wscale = this.windScale, wamp = this.windAmp;
     // wind scratch (kept on the field so the hot loop allocates zero objects
     // per step). Hoisted to locals so the inner loop reads only typed arrays.
     const wscratch = this._wind;
+    // windScale ≤ 0 (e.g. explicit 0, or a non-finite value) is treated as
+    // "no wind" rather than silently coerced to 1 — keeps field.windScale and
+    // the effective value in step() in agreement. windAmp === 0 already skips
+    // the wind path, so the guard is `wamp && wscale > 0`.
+    const windOn = wamp && wscale > 0;
     // vortex invariant scalars (hoist once per step — constant across particles)
     let vAxis = 0, vCx = 0, vCy = 0, vCz = 0, vSt = 0, vInw = 0, vUpdraft = 0;
     if (vx0) {
@@ -147,7 +152,7 @@ export class Field {
       const w = wobble[k] || 1;
       let vx = vel[k * 2], vy = vel[k * 2 + 1];
       vx += gx * dt; vy += gy * dt;            // gravity
-      if (wamp) {                              // curl-ish wind (organic drift)
+      if (windOn) {                              // curl-ish wind (organic drift)
         // inlined `wind()`: writes ax/ay to the scratch object (no allocation).
         const xs = pos[k * 2] / wscale, ys = pos[k * 2 + 1] / wscale;
         wscratch.ax = (Math.sin(ys * 0.7 + t * 0.6) + 0.5 * Math.sin(ys * 1.7 - t * 0.9 + xs * 0.3)) * wamp;
