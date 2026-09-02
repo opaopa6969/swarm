@@ -38,7 +38,16 @@ export interface Vortex3D {
 
 export type Vortex = Vortex2D | Vortex3D | null;
 
-/** Reserved for the M3 collision milestone; currently has no effect. */
+/** M2 lightweight fluid settings. h is the smoothing radius. */
+export interface SphOptions {
+  h?: number;
+  radius?: number;
+  restDensity?: number;
+  stiffness?: number;
+  viscosity?: number;
+  mass?: number;
+}
+
 export type Bounds = [number, number, number, number] | null;
 
 export interface FieldOptions {
@@ -58,6 +67,8 @@ export interface FieldOptions {
   vortex?: Vortex;
   /** Reserved for M3 collision/cull; currently unused. Default null. */
   bounds?: Bounds;
+  /** Enable the deterministic uniform-grid SPH-lite pass. Default null (M1). */
+  sph?: SphOptions | null;
   /** Deterministic emit + replay seed. Default 1. */
   seed?: number;
   /** Max particles (buffers are pre-sized, never grow mid-step). Default 8192. */
@@ -106,6 +117,8 @@ export class Field {
   vortex: Vortex;
   /** Reserved for M3 collision/cull; currently unused. */
   bounds: Bounds;
+  /** SPH-lite settings, or null for the M1 drift regime. */
+  sph: SphOptions | null;
   /** Max particles (buffers are pre-sized, never grow mid-step). */
   capacity: number;
   /** Live particle count. */
@@ -121,6 +134,8 @@ export class Field {
   readonly lives: Float64Array;
   /** Live particle depth-axis positions (length = count). */
   readonly depths: Float64Array;
+  /** Per-particle SPH density (updated by step when sph is enabled). */
+  readonly density: Float64Array;
 
   /**
    * Spawn n particles from pos with seeded jitter. Spawn stops at capacity;

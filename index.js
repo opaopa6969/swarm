@@ -67,6 +67,7 @@ export class Field {
     flutterFreq = 1.2,     // sway oscillations per second (each particle gets its own phase)
     vortex = null,         // { center:[x,y], strength, inward=0 } — tornado/updraft swirl
     bounds = null,         // optional [minX,minY,maxX,maxY] for M3 collision/cull
+    sph = null,            // optional M2 fluid: { h, restDensity, stiffness, viscosity, mass }
     seed = 1,
     capacity = 8192,       // max particles (buffers are pre-sized, never grow mid-step)
   } = {}) {
@@ -78,6 +79,7 @@ export class Field {
     this.flutterFreq = flutterFreq;
     this.vortex = vortex;
     this.bounds = bounds;
+    this.sph = sph;
     this.capacity = capacity;
     this.rand = mulberry32(seed);
     this.t = 0;
@@ -99,6 +101,10 @@ export class Field {
     // allocates zero objects per step. Plain object with numeric fields keeps
     // a stable Shape (see V8 Shapes & ICs) so ICs stay monomorphic.
     this._wind = { ax: 0, ay: 0 };
+    this.density = new Float64Array(capacity);
+    this._sphForceX = new Float64Array(capacity);
+    this._sphForceY = new Float64Array(capacity);
+    this._grid = new Map();
   }
 
   // spawn n particles from `pos` with seeded jitter. `spread` scatters position,
@@ -139,6 +145,8 @@ export class Field {
     // the effective value in step() in agreement. windAmp === 0 already skips
     // the wind path, so the guard is `wamp && wscale > 0`.
     const windOn = wamp && wscale > 0;
+    const sph = this.sph;
+    if (sph && this.count) this.#sphForces(sph);
     // vortex invariant scalars (hoist once per step — constant across particles)
     let vAxis = 0, vCx = 0, vCy = 0, vCz = 0, vSt = 0, vInw = 0, vUpdraft = 0;
     if (vx0) {
@@ -151,6 +159,10 @@ export class Field {
     for (let k = 0; k < this.count; k++) {
       const w = wobble[k] || 1;
       let vx = vel[k * 2], vy = vel[k * 2 + 1];
+      if (sph) {
+        vx += this._sphForceX[k] * dt;
+        vy += this._sphForceY[k] * dt;
+      }
       vx += gx * dt; vy += gy * dt;            // gravity
       if (windOn) {                              // curl-ish wind (organic drift)
         // inlined `wind()`: writes ax/ay to the scratch object (no allocation).
@@ -193,10 +205,67 @@ export class Field {
       zpos[k] += vz * dt;
     }
     this.#ageAndCull(dt);
-    // TODO M2 SPH-lite: build uniform-grid neighbour hash over `pos`, then
-    //   density → pressure → symmetric pressure force → XSPH viscosity passes.
     // TODO M3 collision: clamp/bounce against `bounds` (ground plane / box).
     return this;
+  }
+
+  // A compact, deterministic 2D SPH pass. The grid is rebuilt every step and
+  // stores particle indices in insertion order, making results independent of
+  // Map iteration details and reducing neighbour work to O(N * local density).
+  #sphForces(config) {
+    const h = config.h ?? config.radius ?? 1;
+    if (!(h > 0) || !Number.isFinite(h)) return;
+    const mass = config.mass ?? 1;
+    const rest = config.restDensity ?? 1;
+    const stiffness = config.stiffness ?? 1;
+    const viscosity = config.viscosity ?? 0.1;
+    const h2 = h * h;
+    const pos = this.pos, vel = this.vel, n = this.count, grid = this._grid;
+    grid.clear();
+    const cell = (v) => Math.floor(v / h);
+    for (let i = 0; i < n; i++) {
+      const key = cell(pos[i * 2]) + ',' + cell(pos[i * 2 + 1]);
+      let bucket = grid.get(key);
+      if (!bucket) { bucket = []; grid.set(key, bucket); }
+      bucket.push(i);
+    }
+    // poly6 density kernel; the self contribution prevents zero density.
+    const densityK = 4 / (Math.PI * h2 * h2 * h2);
+    for (let i = 0; i < n; i++) {
+      const ix = cell(pos[i * 2]), iy = cell(pos[i * 2 + 1]);
+      let d = mass * densityK * h2 * h2 * h2;
+      for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+        const b = grid.get((ix + ox) + ',' + (iy + oy)); if (!b) continue;
+        for (const j of b) { if (j === i) continue;
+          const dx = pos[j * 2] - pos[i * 2], dy = pos[j * 2 + 1] - pos[i * 2 + 1];
+          const q = h2 - dx * dx - dy * dy;
+          if (q > 0) d += mass * densityK * q * q * q;
+        }
+      }
+      this.density[i] = d;
+    }
+    const gradK = -30 / (Math.PI * h2 * h2 * h2);
+    const viscK = 20 / (3 * Math.PI * h2 * h2 * h);
+    for (let i = 0; i < n; i++) {
+      const ix = cell(pos[i * 2]), iy = cell(pos[i * 2 + 1]);
+      let fx = 0, fy = 0, pi = stiffness * Math.max(0, this.density[i] - rest);
+      for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+        const b = grid.get((ix + ox) + ',' + (iy + oy)); if (!b) continue;
+        for (const j of b) { if (j === i) continue;
+          const dx = pos[j * 2] - pos[i * 2], dy = pos[j * 2 + 1] - pos[i * 2 + 1];
+          const r2 = dx * dx + dy * dy; if (!(r2 > 1e-12 && r2 < h2)) continue;
+          const r = Math.sqrt(r2), q = h - r;
+          const pj = stiffness * Math.max(0, this.density[j] - rest);
+          const pressure = mass * (pi + pj) / (2 * Math.max(this.density[j], 1e-9)) * gradK * q * q;
+          fx += pressure * dx / r; fy += pressure * dy / r;
+          const lap = viscK * q;
+          fx += viscosity * mass * (vel[j * 2] - vel[i * 2]) / Math.max(this.density[j], 1e-9) * lap;
+          fy += viscosity * mass * (vel[j * 2 + 1] - vel[i * 2 + 1]) / Math.max(this.density[j], 1e-9) * lap;
+        }
+      }
+      this._sphForceX[i] = fx / Math.max(this.density[i], 1e-9);
+      this._sphForceY[i] = fy / Math.max(this.density[i], 1e-9);
+    }
   }
 
   // age particles, fade lifetime, and recycle the dead by swapping the last live
@@ -213,6 +282,7 @@ export class Field {
           this.life[k] = this.life[last]; this.age[k] = this.age[last];
           this.phase[k] = this.phase[last]; this.spin[k] = this.spin[last]; this.wobble[k] = this.wobble[last];
           this.zpos[k] = this.zpos[last]; this.zvel[k] = this.zvel[last];
+          this.density[k] = this.density[last];
         }
         k--; // re-test the swapped-in particle
       }
