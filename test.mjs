@@ -334,5 +334,26 @@ function run(opts, emitOpts, steps = 120, n = 500) {
   ok(Number.isNaN(f.windScale), 'field.windScale preserves NaN (no silent coercion to a default)');
 }
 
+// 21) M2 SPH-lite: nearby particles interact through the uniform grid, while
+// the default M1 path remains unchanged. Density and force passes are finite
+// and deterministic for a settling fluid-like cluster.
+{
+  const opts = { gravity: [0, 0], drag: 0, seed: 6,
+    sph: { h: 2, restDensity: 0.1, stiffness: 4, viscosity: 0.2, mass: 1 } };
+  const a = new Field(opts), b = new Field(opts);
+  for (const f of [a, b]) f.emit(20, { pos: [0, 0], spread: 0.2, life: 10 });
+  for (let i = 0; i < 30; i++) { a.step(1 / 60); b.step(1 / 60); }
+  ok(a.density.slice(0, a.count).every(Number.isFinite), 'SPH densities stay finite');
+  ok(allFinite(a), 'SPH positions stay finite');
+  ok(JSON.stringify([...a.positions]) === JSON.stringify([...b.positions]),
+    'SPH uniform-grid simulation is deterministic');
+  const isolated = new Field({ gravity: [0, 0], drag: 0,
+    sph: { h: 1, restDensity: 1, stiffness: 10 }, seed: 2 });
+  isolated.emit(1, { pos: [0, 0], life: 2 });
+  isolated.step(1 / 60);
+  ok(isolated.positions[0] === 0 && isolated.positions[1] === 0,
+    'an isolated SPH particle has no spurious pressure motion');
+}
+
 console.log(`swarm M1: ${pass} passed${fail ? `, ${fail} failed` : ''}`);
 process.exit(fail ? 1 : 0);

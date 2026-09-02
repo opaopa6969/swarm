@@ -89,6 +89,7 @@ const field = new Field({
   flutterFreq: 1.2,     // sway oscillations per second
   vortex: null,          // optional 2D swirl or { axis: "y", ... } tornado
   bounds: null,         // reserved for M3 collision/cull; currently unused
+  sph: null,            // optional M2: { h, restDensity, stiffness, viscosity, mass }
   seed: 42,             // deterministic emit + replay
   capacity: 8192,       // pre-sized buffers (never grow mid-step)
 });
@@ -114,8 +115,9 @@ field.count;            // live particle count
   curl-ish wind = smoke / snow / petal drift), optional flutter/vortex motion,
   seeded-deterministic emit, lifetime cull and optional z integration. *All in
   `index.js`.*
-- **M2** SPH-lite: uniform-grid neighbour search → density → pressure → viscosity
-  (water splash / pool).
+- **M2 (implemented)** SPH-lite: set `sph` to enable a uniform-grid neighbour
+  search → density → pressure → viscosity pass (water splash / pool). Leaving it
+  null preserves the cheaper M1 drift behavior.
 - **M3** collision vs ground plane / box: bounce + settle (`bounds`, restitution,
   friction).
 - **M4** host wiring (see below): determinism preserved end-to-end for replay.
